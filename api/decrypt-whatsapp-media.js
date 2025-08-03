@@ -1,5 +1,5 @@
-// api/decrypt-whatsapp-media-fixed.js
-// Versi yang diperbaiki dengan implementasi HKDF yang benar dan debugging
+// api/decrypt-whatsapp-media-v2.js
+// Versi dengan implementasi yang lebih akurat berdasarkan spesifikasi WhatsApp
 
 import crypto from "crypto";
 
@@ -12,20 +12,20 @@ class WhatsAppMediaDecryptor {
   }
 
   /**
-   * HKDF Extract - RFC 5869 compliant
+   * HKDF Extract - RFC 5869
    */
   hkdfExtract(salt, ikm) {
     if (!salt || salt.length === 0) {
-      salt = Buffer.alloc(32, 0); // Zero salt jika null
+      salt = Buffer.alloc(32, 0);
     }
     return crypto.createHmac("sha256", salt).update(ikm).digest();
   }
 
   /**
-   * HKDF Expand - RFC 5869 compliant
+   * HKDF Expand - RFC 5869
    */
   hkdfExpand(prk, info, length) {
-    const hashLength = 32; // SHA-256 output length
+    const hashLength = 32;
     const n = Math.ceil(length / hashLength);
     let okm = Buffer.alloc(0);
     let t = Buffer.alloc(0);
@@ -43,100 +43,133 @@ class WhatsAppMediaDecryptor {
   }
 
   /**
-   * HKDF - RFC 5869 compliant implementation
+   * Generate keys dengan format yang tepat sesuai WhatsApp protocol
    */
-  hkdf(ikm, salt, info, length) {
-    const prk = this.hkdfExtract(salt, ikm);
-    return this.hkdfExpand(prk, info, length);
-  }
-
-  /**
-   * Generate keys sesuai spesifikasi WhatsApp yang benar
-   */
-  generateWhatsAppKeys(mediaKey, mediaType = "image") {
-    const infoStrings = {
-      image: "WhatsApp Image Keys",
-      video: "WhatsApp Video Keys",
-      audio: "WhatsApp Audio Keys",
-      document: "WhatsApp Document Keys",
+  generateWhatsAppKeysV1(mediaKey, mediaType = "image") {
+    // Format info string yang benar
+    const infoMap = {
+      image: Buffer.from("WhatsApp Image Keys", "utf8"),
+      video: Buffer.from("WhatsApp Video Keys", "utf8"),
+      audio: Buffer.from("WhatsApp Audio Keys", "utf8"),
+      document: Buffer.from("WhatsApp Document Keys", "utf8"),
     };
 
-    const info = Buffer.from(
-      infoStrings[mediaType] || infoStrings.image,
-      "utf8"
-    );
-    const salt = Buffer.alloc(32, 0); // 32 bytes zero salt
+    const info = infoMap[mediaType] || infoMap.image;
+    const salt = Buffer.alloc(32, 0);
 
-    // Generate 112 bytes total: 16 (IV) + 32 (cipher key) + 32 (MAC key) + 32 (refKey)
-    const derivedKey = this.hkdf(mediaKey, salt, info, 112);
+    const prk = this.hkdfExtract(salt, mediaKey);
+    const derivedKey = this.hkdfExpand(prk, info, 112);
 
     return {
-      iv: derivedKey.slice(0, 16), // bytes 0-15
-      cipherKey: derivedKey.slice(16, 48), // bytes 16-47
-      macKey: derivedKey.slice(48, 80), // bytes 48-79
-      refKey: derivedKey.slice(80, 112), // bytes 80-111 (reference key)
-      type: "standard",
+      iv: derivedKey.slice(0, 16),
+      cipherKey: derivedKey.slice(16, 48),
+      macKey: derivedKey.slice(48, 80),
+      type: "v1_standard",
     };
   }
 
   /**
-   * Variasi alternatif tanpa salt
+   * Variasi dengan format info berbeda
    */
-  generateAlternativeKeys(mediaKey, mediaType = "image") {
-    const infoStrings = {
-      image: "WhatsApp Image Keys",
-      video: "WhatsApp Video Keys",
-      audio: "WhatsApp Audio Keys",
-      document: "WhatsApp Document Keys",
+  generateWhatsAppKeysV2(mediaKey, mediaType = "image") {
+    // Coba dengan format yang lebih pendek
+    const infoMap = {
+      image: Buffer.from("WhatsApp Image", "utf8"),
+      video: Buffer.from("WhatsApp Video", "utf8"),
+      audio: Buffer.from("WhatsApp Audio", "utf8"),
+      document: Buffer.from("WhatsApp Document", "utf8"),
     };
 
-    const info = Buffer.from(
-      infoStrings[mediaType] || infoStrings.image,
-      "utf8"
-    );
+    const info = infoMap[mediaType] || infoMap.image;
+    const salt = Buffer.alloc(32, 0);
 
-    // Direct expand tanpa extract
+    const prk = this.hkdfExtract(salt, mediaKey);
+    const derivedKey = this.hkdfExpand(prk, info, 112);
+
+    return {
+      iv: derivedKey.slice(0, 16),
+      cipherKey: derivedKey.slice(16, 48),
+      macKey: derivedKey.slice(48, 80),
+      type: "v2_short",
+    };
+  }
+
+  /**
+   * Variasi dengan case sensitive
+   */
+  generateWhatsAppKeysV3(mediaKey, mediaType = "image") {
+    const infoMap = {
+      image: Buffer.from("whatsapp image keys", "utf8"),
+      video: Buffer.from("whatsapp video keys", "utf8"),
+      audio: Buffer.from("whatsapp audio keys", "utf8"),
+      document: Buffer.from("whatsapp document keys", "utf8"),
+    };
+
+    const info = infoMap[mediaType] || infoMap.image;
+    const salt = Buffer.alloc(32, 0);
+
+    const prk = this.hkdfExtract(salt, mediaKey);
+    const derivedKey = this.hkdfExpand(prk, info, 112);
+
+    return {
+      iv: derivedKey.slice(0, 16),
+      cipherKey: derivedKey.slice(16, 48),
+      macKey: derivedKey.slice(48, 80),
+      type: "v3_lowercase",
+    };
+  }
+
+  /**
+   * Variasi dengan media key sebagai salt
+   */
+  generateWhatsAppKeysV4(mediaKey, mediaType = "image") {
+    const infoMap = {
+      image: Buffer.from("WhatsApp Image Keys", "utf8"),
+      video: Buffer.from("WhatsApp Video Keys", "utf8"),
+      audio: Buffer.from("WhatsApp Audio Keys", "utf8"),
+      document: Buffer.from("WhatsApp Document Keys", "utf8"),
+    };
+
+    const info = infoMap[mediaType] || infoMap.image;
+    const salt = mediaKey; // Gunakan media key sebagai salt
+
+    const prk = this.hkdfExtract(salt, mediaKey);
+    const derivedKey = this.hkdfExpand(prk, info, 112);
+
+    return {
+      iv: derivedKey.slice(0, 16),
+      cipherKey: derivedKey.slice(16, 48),
+      macKey: derivedKey.slice(48, 80),
+      type: "v4_mediakey_salt",
+    };
+  }
+
+  /**
+   * Variasi langsung tanpa HKDF extract
+   */
+  generateWhatsAppKeysV5(mediaKey, mediaType = "image") {
+    const infoMap = {
+      image: Buffer.from("WhatsApp Image Keys", "utf8"),
+      video: Buffer.from("WhatsApp Video Keys", "utf8"),
+      audio: Buffer.from("WhatsApp Audio Keys", "utf8"),
+      document: Buffer.from("WhatsApp Document Keys", "utf8"),
+    };
+
+    const info = infoMap[mediaType] || infoMap.image;
+
+    // Langsung expand tanpa extract
     const derivedKey = this.hkdfExpand(mediaKey, info, 112);
 
     return {
       iv: derivedKey.slice(0, 16),
       cipherKey: derivedKey.slice(16, 48),
       macKey: derivedKey.slice(48, 80),
-      refKey: derivedKey.slice(80, 112),
-      type: "no_salt",
+      type: "v5_direct_expand",
     };
   }
 
   /**
-   * Variasi dengan salt berbeda
-   */
-  generateVariantKeys(mediaKey, mediaType = "image") {
-    const infoStrings = {
-      image: "WhatsApp Image Keys",
-      video: "WhatsApp Video Keys",
-      audio: "WhatsApp Audio Keys",
-      document: "WhatsApp Document Keys",
-    };
-
-    const info = Buffer.from(
-      infoStrings[mediaType] || infoStrings.image,
-      "utf8"
-    );
-    const salt = Buffer.from("WhatsApp", "utf8"); // Different salt
-
-    const derivedKey = this.hkdf(mediaKey, salt, info, 112);
-
-    return {
-      iv: derivedKey.slice(0, 16),
-      cipherKey: derivedKey.slice(16, 48),
-      macKey: derivedKey.slice(48, 80),
-      refKey: derivedKey.slice(80, 112),
-      type: "variant_salt",
-    };
-  }
-
-  /**
-   * Download encrypted media dari URL
+   * Download encrypted media
    */
   async downloadEncryptedMedia(url) {
     try {
@@ -160,110 +193,100 @@ class WhatsAppMediaDecryptor {
   }
 
   /**
-   * Verify MAC dengan debugging yang lebih detail
+   * Verify MAC dengan berbagai metode
    */
-  verifyMacDetailed(encryptedData, macKey, keyInfo = "unknown") {
+  verifyMacVariations(encryptedData, macKey, keyInfo = "unknown") {
     if (encryptedData.length < 10) {
-      return {
-        success: false,
-        reason: "data_too_short",
-        dataLength: encryptedData.length,
-      };
+      return { success: false, reason: "data_too_short" };
     }
 
-    // WhatsApp menggunakan 10 bytes terakhir sebagai MAC
-    const mediaData = encryptedData.slice(0, -10);
-    const receivedMac = encryptedData.slice(-10);
+    const results = [];
 
-    console.log(`\n=== MAC Verification [${keyInfo}] ===`);
-    console.log(`Data length: ${mediaData.length} bytes`);
-    console.log(`MAC key: ${macKey.toString("hex")}`);
-    console.log(`Received MAC: ${receivedMac.toString("hex")}`);
+    // Method 1: Standard - 10 bytes terakhir
+    const mediaData1 = encryptedData.slice(0, -10);
+    const receivedMac1 = encryptedData.slice(-10);
+    const calculatedMac1 = crypto
+      .createHmac("sha256", macKey)
+      .update(mediaData1)
+      .digest()
+      .slice(0, 10);
 
-    // Hitung MAC menggunakan HMAC-SHA256, ambil 10 bytes pertama
-    const hmac = crypto.createHmac("sha256", macKey);
-    hmac.update(mediaData);
-    const fullMac = hmac.digest();
-    const calculatedMac = fullMac.slice(0, 10);
+    const valid1 = crypto.timingSafeEqual(receivedMac1, calculatedMac1);
+    results.push({
+      method: "last_10_bytes",
+      success: valid1,
+      received: receivedMac1.toString("hex"),
+      calculated: calculatedMac1.toString("hex"),
+    });
 
-    console.log(`Calculated MAC: ${calculatedMac.toString("hex")}`);
-    console.log(`Full HMAC: ${fullMac.toString("hex")}`);
+    // Method 2: Coba dengan 32 bytes terakhir sebagai MAC
+    if (encryptedData.length >= 32) {
+      const mediaData2 = encryptedData.slice(0, -32);
+      const receivedMac2 = encryptedData.slice(-32);
+      const calculatedMac2 = crypto
+        .createHmac("sha256", macKey)
+        .update(mediaData2)
+        .digest();
 
-    const isValid = crypto.timingSafeEqual(receivedMac, calculatedMac);
-    console.log(`MAC Valid: ${isValid}`);
+      const valid2 = crypto.timingSafeEqual(receivedMac2, calculatedMac2);
+      results.push({
+        method: "last_32_bytes",
+        success: valid2,
+        received: receivedMac2.toString("hex"),
+        calculated: calculatedMac2.toString("hex"),
+      });
+    }
 
-    return {
-      success: isValid,
-      receivedMac: receivedMac.toString("hex"),
-      calculatedMac: calculatedMac.toString("hex"),
-      fullHmac: fullMac.toString("hex"),
-      keyInfo: keyInfo,
-      dataLength: mediaData.length,
-    };
+    // Method 3: Coba dengan media key + data
+    const combinedData = Buffer.concat([mediaKey, mediaData1]);
+    const calculatedMac3 = crypto
+      .createHmac("sha256", macKey)
+      .update(combinedData)
+      .digest()
+      .slice(0, 10);
+
+    const valid3 = crypto.timingSafeEqual(receivedMac1, calculatedMac3);
+    results.push({
+      method: "with_mediakey",
+      success: valid3,
+      received: receivedMac1.toString("hex"),
+      calculated: calculatedMac3.toString("hex"),
+    });
+
+    // Method 4: Coba dengan IV + data
+    // Kita perlu generate keys dulu untuk mendapatkan IV
+    const tempKeys = this.generateWhatsAppKeysV1(macKey, "image");
+    const combinedDataIV = Buffer.concat([tempKeys.iv, mediaData1]);
+    const calculatedMac4 = crypto
+      .createHmac("sha256", macKey)
+      .update(combinedDataIV)
+      .digest()
+      .slice(0, 10);
+
+    const valid4 = crypto.timingSafeEqual(receivedMac1, calculatedMac4);
+    results.push({
+      method: "with_iv",
+      success: valid4,
+      received: receivedMac1.toString("hex"),
+      calculated: calculatedMac4.toString("hex"),
+    });
+
+    // Return hasil yang berhasil atau semua hasil untuk debugging
+    const successful = results.find((r) => r.success);
+    return successful || { success: false, attempts: results, keyInfo };
   }
 
   /**
-   * Decrypt media menggunakan AES-256-CBC
-   */
-  decryptMedia(encryptedData, cipherKey, iv) {
-    // Remove MAC dari akhir data
-    const cipherData = encryptedData.slice(0, -10);
-
-    console.log(`\n=== Decryption ===`);
-    console.log(`Cipher data length: ${cipherData.length}`);
-    console.log(`Cipher key: ${cipherKey.toString("hex")}`);
-    console.log(`IV: ${iv.toString("hex")}`);
-
-    try {
-      const decipher = crypto.createDecipheriv("aes-256-cbc", cipherKey, iv);
-      decipher.setAutoPadding(true);
-
-      let decrypted = decipher.update(cipherData);
-      const final = decipher.final();
-
-      const result = Buffer.concat([decrypted, final]);
-      console.log(`Decrypted length: ${result.length}`);
-
-      return result;
-    } catch (error) {
-      console.log(`Decryption error: ${error.message}`);
-      throw new Error(`AES decryption failed: ${error.message}`);
-    }
-  }
-
-  /**
-   * Coba dekripsi dengan mode ECB (fallback)
-   */
-  decryptMediaECB(encryptedData, cipherKey) {
-    const cipherData = encryptedData.slice(0, -10);
-
-    console.log(`\n=== Trying ECB Decryption ===`);
-
-    try {
-      const decipher = crypto.createDecipheriv("aes-256-ecb", cipherKey, null);
-      decipher.setAutoPadding(true);
-
-      let decrypted = decipher.update(cipherData);
-      const final = decipher.final();
-
-      return Buffer.concat([decrypted, final]);
-    } catch (error) {
-      throw new Error(`AES-ECB decryption failed: ${error.message}`);
-    }
-  }
-
-  /**
-   * Main function dengan debugging komprehensif
+   * Main decryption function dengan testing lebih komprehensif
    */
   async decryptWhatsAppMedia(messageData, debugMode = true) {
     const debugLog = [];
 
     try {
-      // Extract data dari message dengan berbagai struktur
+      // Extract media message
       let mediaMessage = null;
       let mediaType = "image";
 
-      // Coba berbagai jalur untuk mengakses message data
       const possiblePaths = [
         messageData,
         messageData.payload,
@@ -295,62 +318,55 @@ class WhatsAppMediaDecryptor {
         }
       }
 
-      debugLog.push(`Detected media type: ${mediaType}`);
-
       if (!mediaMessage) {
-        throw new Error("No media message found in the provided data");
+        throw new Error("No media message found");
       }
 
       const mediaKeyBase64 = mediaMessage.mediaKey;
       const mediaUrl = mediaMessage.url;
 
       if (!mediaKeyBase64 || !mediaUrl) {
-        throw new Error("Missing mediaKey or URL in message data");
+        throw new Error("Missing mediaKey or URL");
       }
 
-      debugLog.push(
-        `Media Key (base64): ${mediaKeyBase64.substring(0, 20)}...`
-      );
-      debugLog.push(`Media URL: ${mediaUrl.substring(0, 60)}...`);
+      debugLog.push(`Media type: ${mediaType}`);
+      debugLog.push(`Media key: ${mediaKeyBase64.substring(0, 20)}...`);
 
-      // Decode media key
       const mediaKey = this.decodeMediaKey(mediaKeyBase64);
-      debugLog.push(`Media Key (hex): ${mediaKey.toString("hex")}`);
-      debugLog.push(`Media Key length: ${mediaKey.length} bytes`);
-
-      // Download encrypted media
-      console.log("Downloading encrypted media...");
       const encryptedData = await this.downloadEncryptedMedia(mediaUrl);
-      debugLog.push(`Downloaded encrypted data: ${encryptedData.length} bytes`);
 
-      // Show first and last few bytes untuk debugging
-      const firstBytes = encryptedData.slice(0, 16).toString("hex");
-      const lastBytes = encryptedData.slice(-16).toString("hex");
-      debugLog.push(`First 16 bytes: ${firstBytes}`);
-      debugLog.push(`Last 16 bytes: ${lastBytes}`);
+      debugLog.push(`Media key hex: ${mediaKey.toString("hex")}`);
+      debugLog.push(`Encrypted data length: ${encryptedData.length}`);
+      debugLog.push(
+        `Last 16 bytes: ${encryptedData.slice(-16).toString("hex")}`
+      );
 
-      // Coba semua kombinasi key generation dan media types
-      const mediaTypes = [mediaType, "image", "video", "audio", "document"];
+      // Test semua variasi key generation
       const keyGenerators = [
-        { name: "standard", func: this.generateWhatsAppKeys },
-        { name: "no_salt", func: this.generateAlternativeKeys },
-        { name: "variant_salt", func: this.generateVariantKeys },
+        { name: "v1", func: this.generateWhatsAppKeysV1 },
+        { name: "v2", func: this.generateWhatsAppKeysV2 },
+        { name: "v3", func: this.generateWhatsAppKeysV3 },
+        { name: "v4", func: this.generateWhatsAppKeysV4 },
+        { name: "v5", func: this.generateWhatsAppKeysV5 },
       ];
+
+      const mediaTypes = [mediaType, "image", "video", "audio", "document"];
 
       let workingKeys = null;
       let macResult = null;
+
+      // Global variable untuk menyimpan mediaKey agar bisa diakses di verifyMacVariations
+      this.currentMediaKey = mediaKey;
 
       for (const type of mediaTypes) {
         for (const generator of keyGenerators) {
           const keys = generator.func.call(this, mediaKey, type);
           const keyInfo = `${type}_${generator.name}`;
 
-          debugLog.push(`\nTrying ${keyInfo}:`);
-          debugLog.push(`  IV: ${keys.iv.toString("hex")}`);
-          debugLog.push(`  Cipher Key: ${keys.cipherKey.toString("hex")}`);
-          debugLog.push(`  MAC Key: ${keys.macKey.toString("hex")}`);
+          debugLog.push(`\n=== Testing ${keyInfo} ===`);
+          debugLog.push(`MAC Key: ${keys.macKey.toString("hex")}`);
 
-          const macCheck = this.verifyMacDetailed(
+          const macCheck = this.verifyMacVariations(
             encryptedData,
             keys.macKey,
             keyInfo
@@ -359,12 +375,23 @@ class WhatsAppMediaDecryptor {
           if (macCheck.success) {
             workingKeys = keys;
             macResult = macCheck;
-            debugLog.push(`✅ MAC verified with ${keyInfo}`);
+            debugLog.push(
+              `✅ MAC verified with ${keyInfo} using method: ${macCheck.method}`
+            );
+            debugLog.push(`   Received: ${macCheck.received}`);
+            debugLog.push(`   Calculated: ${macCheck.calculated}`);
             break;
           } else {
             debugLog.push(`❌ MAC failed with ${keyInfo}`);
-            debugLog.push(`   Expected: ${macCheck.calculatedMac}`);
-            debugLog.push(`   Received: ${macCheck.receivedMac}`);
+            if (macCheck.attempts) {
+              macCheck.attempts.forEach((attempt) => {
+                debugLog.push(
+                  `   ${attempt.method}: ${attempt.success ? "✅" : "❌"}`
+                );
+                debugLog.push(`     Expected: ${attempt.calculated}`);
+                debugLog.push(`     Received: ${attempt.received}`);
+              });
+            }
           }
         }
 
@@ -376,44 +403,56 @@ class WhatsAppMediaDecryptor {
           success: false,
           error: "MAC verification failed for all combinations",
           debugLog: debugLog,
+          suggestion:
+            "The WhatsApp media format might have changed or the mediaKey/URL might be invalid",
           encryptedDataLength: encryptedData.length,
           mediaKeyHex: mediaKey.toString("hex"),
-          firstBytes: encryptedData.slice(0, 32).toString("hex"),
-          lastBytes: encryptedData.slice(-32).toString("hex"),
         };
       }
 
-      // Coba dekripsi dengan CBC mode
+      // Decrypt dengan kunci yang berhasil
+      const cipherData = encryptedData.slice(0, -10); // Remove MAC
+
       let decryptedData;
       try {
-        decryptedData = this.decryptMedia(
-          encryptedData,
+        const decipher = crypto.createDecipheriv(
+          "aes-256-cbc",
           workingKeys.cipherKey,
           workingKeys.iv
         );
+        decipher.setAutoPadding(true);
+        decryptedData = Buffer.concat([
+          decipher.update(cipherData),
+          decipher.final(),
+        ]);
         debugLog.push(
-          `✅ CBC Decryption successful: ${decryptedData.length} bytes`
+          `✅ Decryption successful: ${decryptedData.length} bytes`
         );
-      } catch (cbcError) {
-        debugLog.push(`❌ CBC Decryption failed: ${cbcError.message}`);
-
-        // Fallback ke ECB mode
+      } catch (error) {
+        // Try ECB mode as fallback
         try {
-          decryptedData = this.decryptMediaECB(
-            encryptedData,
-            workingKeys.cipherKey
+          const decipher = crypto.createDecipheriv(
+            "aes-256-ecb",
+            workingKeys.cipherKey,
+            null
           );
+          decipher.setAutoPadding(true);
+          decryptedData = Buffer.concat([
+            decipher.update(cipherData),
+            decipher.final(),
+          ]);
           debugLog.push(
             `✅ ECB Decryption successful: ${decryptedData.length} bytes`
           );
         } catch (ecbError) {
-          debugLog.push(`❌ ECB Decryption failed: ${ecbError.message}`);
-          throw new Error(`Both CBC and ECB decryption failed`);
+          throw new Error(
+            `Both CBC and ECB decryption failed: ${error.message}`
+          );
         }
       }
 
-      // Validate decrypted data
-      const fileSignature = decryptedData.slice(0, 4).toString("hex");
+      // Validate file signature
+      const fileSignature = decryptedData.slice(0, 8).toString("hex");
       debugLog.push(`File signature: ${fileSignature}`);
 
       return {
@@ -424,14 +463,13 @@ class WhatsAppMediaDecryptor {
         originalFileSize: mediaMessage.fileLength,
         mediaType: mediaType,
         keyVariation: workingKeys.type,
+        macMethod: macResult.method,
         macResult: macResult,
         fileSignature: fileSignature,
         debugLog: debugMode ? debugLog : undefined,
       };
     } catch (error) {
       debugLog.push(`❌ Error: ${error.message}`);
-      console.error("Decryption error:", error);
-
       return {
         success: false,
         error: error.message,
@@ -442,17 +480,14 @@ class WhatsAppMediaDecryptor {
 }
 
 export default async function handler(req, res) {
-  // Set CORS headers
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
-  // Handle preflight requests
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
-  // Only allow POST requests
   if (req.method !== "POST") {
     return res.status(405).json({
       success: false,
@@ -470,8 +505,6 @@ export default async function handler(req, res) {
       });
     }
 
-    console.log("Processing WhatsApp media decryption request...");
-
     const decryptor = new WhatsAppMediaDecryptor();
     const result = await decryptor.decryptWhatsAppMedia(messageData, debugMode);
 
@@ -480,53 +513,42 @@ export default async function handler(req, res) {
     }
 
     let responseData;
+    const baseResponse = {
+      success: true,
+      mimeType: result.mimeType,
+      fileSize: result.fileSize,
+      originalFileSize: result.originalFileSize,
+      mediaType: result.mediaType,
+      keyVariation: result.keyVariation,
+      macMethod: result.macMethod,
+      fileSignature: result.fileSignature,
+      debugLog: result.debugLog,
+    };
 
     switch (returnFormat.toLowerCase()) {
       case "base64":
         responseData = {
-          success: true,
+          ...baseResponse,
           data: result.data.toString("base64"),
-          mimeType: result.mimeType,
-          fileSize: result.fileSize,
-          originalFileSize: result.originalFileSize,
-          mediaType: result.mediaType,
-          keyVariation: result.keyVariation,
-          fileSignature: result.fileSignature,
           format: "base64",
-          debugLog: result.debugLog,
         };
         break;
 
       case "buffer":
         responseData = {
-          success: true,
+          ...baseResponse,
           data: Array.from(result.data),
-          mimeType: result.mimeType,
-          fileSize: result.fileSize,
-          originalFileSize: result.originalFileSize,
-          mediaType: result.mediaType,
-          keyVariation: result.keyVariation,
-          fileSignature: result.fileSignature,
           format: "buffer",
-          debugLog: result.debugLog,
         };
         break;
 
       case "dataurl":
-        const dataUrl = `data:${result.mimeType};base64,${result.data.toString(
-          "base64"
-        )}`;
         responseData = {
-          success: true,
-          data: dataUrl,
-          mimeType: result.mimeType,
-          fileSize: result.fileSize,
-          originalFileSize: result.originalFileSize,
-          mediaType: result.mediaType,
-          keyVariation: result.keyVariation,
-          fileSignature: result.fileSignature,
+          ...baseResponse,
+          data: `data:${result.mimeType};base64,${result.data.toString(
+            "base64"
+          )}`,
           format: "dataurl",
-          debugLog: result.debugLog,
         };
         break;
 
